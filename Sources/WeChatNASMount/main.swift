@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.maximumNumberOfLines = 3
 
         let note = NSTextField(wrappingLabelWithString:
-            "已实测适配 Mac 微信 4.1.11（构建号 269136）。密码不会保存在本软件中。请先在 Finder 连接一次 SMB 共享并把密码存入钥匙串，然后授予本 App 完全磁盘访问权限。")
+            "适配微信版本：4.1.11。密码不会保存在本软件中。请先在 Finder 连接一次 SMB 共享并把密码存入钥匙串，然后授予本 App 完全磁盘访问权限。")
         note.textColor = .secondaryLabelColor
 
         let stack = NSStackView(views: [title, form, buttons, status, note])

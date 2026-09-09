@@ -4,14 +4,7 @@
 
 ## 版本兼容性
 
-当前软件版本 `v0.1.1` 已在以下环境完成实际验证：
-
-- macOS 26.6.2（Apple Silicon）
-- Mac 版微信 4.1.11（App 构建号 269136）
-- 微信 Bundle ID：`com.tencent.xinWeChat`
-- 微信数据结构：`~/Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/xwechat_files`
-
-微信 4.1.x 如果仍使用相同 Bundle ID 和数据目录结构，预计也可使用，但尚未逐版本验证。微信升级后若改变沙盒或数据目录结构，请先停止自动挂载并确认兼容性。
+适配微信版本：4.1.11
 
 ## 功能
 
