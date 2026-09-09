@@ -31,6 +31,13 @@ chmod +x scripts/build.sh
 
 产物位于 `dist/`。没有 Developer ID 时会使用临时签名，其他 Mac 首次运行可能需要在“隐私与安全性”中手动允许。
 
+GitHub Actions 会在每次推送后生成可下载的构建产物。推送 `v*` 标签时还会自动创建 GitHub Release：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## 安全说明
 
 - 配置文件位于 `~/Library/Application Support/WeChatNASMount/config.json`。
