@@ -2,6 +2,17 @@
 
 一个轻量的 macOS 工具，把 SMB NAS 共享挂载到微信沙盒内部，解决微信因 App Sandbox 无法访问指向 `/Volumes` 的媒体软链接问题。
 
+## 版本兼容性
+
+当前软件版本 `v0.1.1` 已在以下环境完成实际验证：
+
+- macOS 26.6.2（Apple Silicon）
+- Mac 版微信 4.1.11（App 构建号 269136）
+- 微信 Bundle ID：`com.tencent.xinWeChat`
+- 微信数据结构：`~/Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/xwechat_files`
+
+微信 4.1.x 如果仍使用相同 Bundle ID 和数据目录结构，预计也可使用，但尚未逐版本验证。微信升级后若改变沙盒或数据目录结构，请先停止自动挂载并确认兼容性。
+
 ## 功能
 
 - 图形化配置 NAS 地址、共享名、用户名和沙盒挂载点
