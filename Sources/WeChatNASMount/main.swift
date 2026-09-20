@@ -2,11 +2,35 @@ import AppKit
 import Foundation
 
 struct Configuration: Codable {
-    var server = ""
-    var share = ""
-    var username = NSUserName()
-    var mountPoint = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/nas-wechat-storage").path
+    var server: String
+    var fallbackServer: String
+    var share: String
+    var username: String
+    var mountPoint: String
+
+    init(server: String = "", fallbackServer: String = "", share: String = "",
+         username: String = NSUserName(),
+         mountPoint: String = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/nas-wechat-storage").path) {
+        self.server = server
+        self.fallbackServer = fallbackServer
+        self.share = share
+        self.username = username
+        self.mountPoint = mountPoint
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case server, fallbackServer, share, username, mountPoint
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        server = try values.decode(String.self, forKey: .server)
+        fallbackServer = try values.decodeIfPresent(String.self, forKey: .fallbackServer) ?? ""
+        share = try values.decode(String.self, forKey: .share)
+        username = try values.decode(String.self, forKey: .username)
+        mountPoint = try values.decode(String.self, forKey: .mountPoint)
+    }
 }
 
 enum AppPaths {
@@ -50,6 +74,12 @@ enum MountService {
         return result.1.contains(" on \(configuration.mountPoint) (")
     }
 
+    static func notifyMounted(using fallback: Bool) {
+        let route = fallback ? "备用地址" : "主地址"
+        let script = "display notification \"已通过\(route)挂载，可以正常使用微信图片、视频和文件。\" with title \"微信 NAS 已连接\" sound name \"default\""
+        _ = try? output("/usr/bin/osascript", ["-e", script])
+    }
+
     static func mount(_ configuration: Configuration) throws {
         guard !configuration.server.isEmpty, !configuration.share.isEmpty else {
             throw NSError(domain: "WeChatNASMount", code: 1,
@@ -60,14 +90,22 @@ enum MountService {
             atPath: configuration.mountPoint,
             withIntermediateDirectories: true
         )
-        let remote = "//\(configuration.username)@\(configuration.server)/\(configuration.share)"
-        let result = try output("/sbin/mount_smbfs", [
-            "-N", "-o", "nobrowse,noowners", remote, configuration.mountPoint
-        ])
-        guard result.0 == 0 else {
-            throw NSError(domain: "WeChatNASMount", code: Int(result.0),
-                          userInfo: [NSLocalizedDescriptionKey: result.1.trimmingCharacters(in: .whitespacesAndNewlines)])
+        let servers = [configuration.server, configuration.fallbackServer]
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var finalResult: (Int32, String) = (1, "无法连接 NAS。")
+        for (index, server) in servers.enumerated() {
+            let remote = "//\(configuration.username)@\(server)/\(configuration.share)"
+            finalResult = try output("/sbin/mount_smbfs", [
+                "-N", "-o", "nobrowse,noowners", remote, configuration.mountPoint
+            ])
+            if finalResult.0 == 0 {
+                notifyMounted(using: index > 0)
+                return
+            }
         }
+        throw NSError(domain: "WeChatNASMount", code: Int(finalResult.0),
+                      userInfo: [NSLocalizedDescriptionKey: finalResult.1.trimmingCharacters(in: .whitespacesAndNewlines)])
     }
 
     static func installLaunchAgent(appPath: String) throws {
@@ -102,6 +140,7 @@ enum MountService {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private let server = NSTextField()
+    private let fallbackServer = NSTextField()
     private let share = NSTextField()
     private let username = NSTextField()
     private let mountPoint = NSTextField()
@@ -120,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 390),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -132,7 +171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         title.font = .systemFont(ofSize: 24, weight: .semibold)
 
         let form = NSGridView(views: [
-            [NSTextField(labelWithString: "NAS 地址"), server],
+            [NSTextField(labelWithString: "主 NAS 地址"), server],
+            [NSTextField(labelWithString: "备用 NAS 地址"), fallbackServer],
             [NSTextField(labelWithString: "共享名"), share],
             [NSTextField(labelWithString: "用户名"), username],
             [NSTextField(labelWithString: "沙盒挂载点"), mountPoint]
@@ -175,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadFields() {
         let value = MountService.load()
         server.stringValue = value.server
+        fallbackServer.stringValue = value.fallbackServer
         share.stringValue = value.share
         username.stringValue = value.username
         mountPoint.stringValue = value.mountPoint
@@ -182,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configuration() -> Configuration {
         Configuration(server: server.stringValue.trimmingCharacters(in: .whitespaces),
+                      fallbackServer: fallbackServer.stringValue.trimmingCharacters(in: .whitespaces),
                       share: share.stringValue.trimmingCharacters(in: .whitespaces),
                       username: username.stringValue.trimmingCharacters(in: .whitespaces),
                       mountPoint: mountPoint.stringValue.trimmingCharacters(in: .whitespaces))
