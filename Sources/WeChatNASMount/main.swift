@@ -182,6 +182,40 @@ enum MountService {
     }
 }
 
+enum MenuIcon {
+    static func storageBridge() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.saveGState()
+            defer { context.restoreGState() }
+            context.scaleBy(x: 0.75, y: 0.75)
+            context.setStrokeColor(NSColor.black.cgColor)
+            context.setFillColor(NSColor.black.cgColor)
+            context.setLineWidth(1.55)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.move(to: CGPoint(x: 10.5, y: 14.8))
+            context.addLine(to: CGPoint(x: 14.7, y: 14.8))
+            context.addCurve(to: CGPoint(x: 18, y: 11.5),
+                control1: CGPoint(x: 16.5, y: 14.8), control2: CGPoint(x: 18, y: 13.3))
+            context.addLine(to: CGPoint(x: 18, y: 10.1))
+            context.strokePath()
+            for (x, y) in [(1.5, 12.0), (13.5, 4.5)] {
+                context.addPath(CGPath(roundedRect: CGRect(x: x, y: y, width: 9, height: 5.6),
+                    cornerWidth: 1.65, cornerHeight: 1.65, transform: nil))
+                context.strokePath()
+                context.fillEllipse(in: CGRect(x: x + 1.9, y: y + 2.2, width: 1.2, height: 1.2))
+                context.move(to: CGPoint(x: x + 4.8, y: y + 2.8))
+                context.addLine(to: CGPoint(x: x + 6.3, y: y + 2.8))
+                context.strokePath()
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
@@ -238,10 +272,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateMenuIcon(healthy: Bool?) {
         guard let button = statusItem.button else { return }
-        let symbol = healthy == false ? "exclamationmark.triangle" : "server.rack"
         let description = healthy.map { $0 ? "微信 NAS 已连接" : "微信 NAS 连接异常" } ?? "微信 NAS 正在连接"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular))
+        let image = healthy == false
+            ? NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: description)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular))
+            : MenuIcon.storageBridge()
         image?.isTemplate = true
         button.title = ""
         button.image = image
