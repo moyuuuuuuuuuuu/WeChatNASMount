@@ -200,8 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildWindow()
         loadFields()
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "NAS ○"
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        updateMenuIcon(healthy: nil)
         let menu = NSMenu()
         for (title, selector) in [("设置与状态", #selector(showSettings)), ("立即重试", #selector(retryNow)),
                                   ("关闭登录启动", #selector(disableLogin)), ("退出", #selector(quit))] {
@@ -236,6 +236,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
+    private func updateMenuIcon(healthy: Bool?) {
+        guard let button = statusItem.button else { return }
+        let symbol = healthy == false ? "exclamationmark.triangle" : "server.rack"
+        let description = healthy.map { $0 ? "微信 NAS 已连接" : "微信 NAS 连接异常" } ?? "微信 NAS 正在连接"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular))
+        image?.isTemplate = true
+        button.title = ""
+        button.image = image
+        button.imagePosition = .imageOnly
+        button.alphaValue = healthy == nil ? 0.5 : 1
+        button.toolTip = description
+        button.setAccessibilityLabel(description)
+    }
+
     @objc private func retryNow() {
         guard !mounting else { return }
         timer?.invalidate()
@@ -254,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lastMessage = result
             let success = result.hasPrefix("已连接")
             failures = success ? 0 : min(failures + 1, 4)
-            statusItem.button?.title = success ? "NAS ●" : "NAS !"
+            updateMenuIcon(healthy: success)
             statusItem.button?.toolTip = result
             refreshStatus()
             let delay = success ? 60.0 : min(30.0 * pow(2.0, Double(failures - 1)), 300.0)
