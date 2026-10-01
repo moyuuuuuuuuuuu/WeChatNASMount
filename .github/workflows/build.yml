@@ -14,6 +14,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Test mount recognition and media verification
+        run: swift scripts/test.swift
       - name: Build application
         run: ./scripts/build.sh
       - name: Upload build artifact
@@ -25,4 +27,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/WeChat-NAS-Mount-macOS-arm64.zip --generate-notes
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" dist/WeChat-NAS-Mount-macOS-arm64.zip
+          --title "${GITHUB_REF_NAME} — 登录自动连接与媒体验证"
+          --notes "使用正规 macOS 登录项及常驻菜单栏应用，替换旧 LaunchAgent。增加唤醒检查、延迟重试、媒体目录验证和权限/认证提示。升级后请重新确认完全磁盘访问权限；真实重启恢复仍需在目标 Mac 验证。应用为 arm64 临时签名版本。"
+          --generate-notes

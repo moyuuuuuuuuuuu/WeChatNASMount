@@ -9,7 +9,9 @@ app="$build_root/WeChat NAS Mount.app"
 cd "$project_root"
 swift build -c release
 
-rm -rf "$app"
+if [[ -e "$app" ]]; then
+  mv "$app" "$build_root/WeChat-NAS-Mount-previous-$(date +%Y%m%d%H%M%S).app"
+fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp ".build/release/WeChatNASMount" "$app/Contents/MacOS/WeChatNASMount"
 cp "$project_root/Support/Info.plist" "$app/Contents/Info.plist"
