@@ -3,16 +3,20 @@ import Foundation
 import ServiceManagement
 
 struct Configuration: Codable, Sendable {
+    var enabled: Bool
+    var remoteDirectory: String
     var server: String
     var fallbackServer: String
     var share: String
     var username: String
     var mountPoint: String
 
-    init(server: String = "", fallbackServer: String = "", share: String = "",
+    init(enabled: Bool = true, remoteDirectory: String = "", server: String = "", fallbackServer: String = "", share: String = "",
          username: String = NSUserName(),
          mountPoint: String = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/nas-wechat-storage").path) {
+        self.enabled = enabled
+        self.remoteDirectory = remoteDirectory
         self.server = server
         self.fallbackServer = fallbackServer
         self.share = share
@@ -21,11 +25,13 @@ struct Configuration: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case server, fallbackServer, share, username, mountPoint
+        case enabled, remoteDirectory, server, fallbackServer, share, username, mountPoint
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        remoteDirectory = try values.decodeIfPresent(String.self, forKey: .remoteDirectory) ?? ""
         server = try values.decode(String.self, forKey: .server)
         fallbackServer = try values.decodeIfPresent(String.self, forKey: .fallbackServer) ?? ""
         share = try values.decode(String.self, forKey: .share)
@@ -44,33 +50,17 @@ enum AppPaths {
 
 enum MountService {
     static func load() -> Configuration {
-        guard let data = try? Data(contentsOf: AppPaths.config),
-              let value = try? JSONDecoder().decode(Configuration.self, from: data) else {
-            return Configuration()
-        }
-        return value
+        SettingsStore.load().wechat
     }
 
     static func save(_ value: Configuration) throws {
-        try FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(value)
-        try data.write(to: AppPaths.config, options: .atomic)
+        var settings = SettingsStore.load()
+        settings.wechat = value
+        try SettingsStore.save(settings)
     }
 
     static func output(_ executable: String, _ arguments: [String]) throws -> (Int32, String) {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: deadline)
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        deadline.cancel()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        try CommandRunner.run(executable, arguments)
     }
 
     static func isMounted(_ configuration: Configuration) -> Bool {
@@ -79,10 +69,12 @@ enum MountService {
     }
 
     static func matchesMount(_ listing: String, _ configuration: Configuration) -> Bool {
-        listing.split(separator: "\n").contains { line in
-            line.contains(" on \(configuration.mountPoint) (") && line.contains("smbfs,") &&
-            [configuration.server, configuration.fallbackServer].filter { !$0.isEmpty }.contains { server in
-                line.hasPrefix("//\(configuration.username)@\(server)/\(configuration.share) on ")
+        listing.split(separator: "\n").contains { raw in
+            let line = String(raw)
+            guard let split = line.range(of: " on "), line.contains(" on \(configuration.mountPoint) ("), line.contains("smbfs,") else { return false }
+            let remote = String(line[..<split.lowerBound]).removingPercentEncoding ?? String(line[..<split.lowerBound])
+            return [configuration.server, configuration.fallbackServer].filter { !$0.isEmpty }.contains { server in
+                remote == "//\(configuration.username)@\(server)/\(configuration.share)"
             }
         }
     }
@@ -103,7 +95,8 @@ enum MountService {
                 }
                 let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
                 guard target.hasPrefix(configuration.mountPoint + "/"),
-                      resolved.hasPrefix(configuration.mountPoint + "/") else {
+                      resolved.hasPrefix(configuration.mountPoint + "/"),
+                      resolved.hasPrefix(configuration.remoteRoot.path + "/") else {
                     throw NSError(domain: "WeChatNASMount", code: 2,
                         userInfo: [NSLocalizedDescriptionKey: "媒体链接指向其他位置：\(name)"])
                 }
@@ -138,6 +131,7 @@ enum MountService {
     }
 
     static func mount(_ configuration: Configuration) throws {
+        try configuration.validate(forQQ: false)
         guard !configuration.server.isEmpty, !configuration.share.isEmpty else {
             throw NSError(domain: "WeChatNASMount", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "请填写 NAS 地址和共享名。"])
@@ -216,235 +210,74 @@ enum MenuIcon {
     }
 }
 
-@MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var window: NSWindow!
-    private let server = NSTextField()
-    private let fallbackServer = NSTextField()
-    private let share = NSTextField()
-    private let username = NSTextField()
-    private let mountPoint = NSTextField()
-    private let status = NSTextField(labelWithString: "")
-    private var statusItem: NSStatusItem!
-    private var timer: Timer?
-    private var mounting = false
-    private var failures = 0
-    private var lastMessage = "等待检查"
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        buildWindow()
-        loadFields()
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        updateMenuIcon(healthy: nil)
-        let menu = NSMenu()
-        for (title, selector) in [("设置与状态", #selector(showSettings)), ("立即重试", #selector(retryNow)),
-                                  ("关闭登录启动", #selector(disableLogin)), ("退出", #selector(quit))] {
-            let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
+// Worker processes isolate network filesystem calls from the GUI and from the other app.
+if let index = CommandLine.arguments.firstIndex(of: "--check-profile"), CommandLine.arguments.count > index + 1 {
+    do {
+        let settings = try SettingsStore.read()
+        switch CommandLine.arguments[index + 1] {
+        case "wechat":
+            guard settings.wechat.enabled else { throw failure("微信自动连接未启用。") }
+            try MountService.mount(settings.wechat)
+            print("已连接，\(try MountService.verifyMedia(settings.wechat)) 个微信媒体目录可读")
+        case "qq":
+            guard settings.qq.enabled else { throw failure("QQ 自动连接未启用。") }
+            try QQService.mount(settings.qq)
+            let count = try QQService.probe(settings.qq)
+            print(count == 0 ? "NAS 已连接，尚未迁移 QQ 图片" : "已连接，\(count) 个 QQ 图片目录可读")
+        default: throw failure("未知应用。")
         }
-        statusItem.menu = menu
-        if FileManager.default.fileExists(atPath: AppPaths.config.path) {
-            window.orderOut(nil)
-            retryNow()
-        }
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(retryNow),
-            name: NSWorkspace.didWakeNotification, object: nil)
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showSettings()
-        return true
-    }
-
-    @objc private func showSettings() {
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        refreshStatus()
-    }
-
-    @objc private func disableLogin() {
-        do { try SMAppService.mainApp.unregister(); refreshStatus() }
-        catch { lastMessage = error.localizedDescription; refreshStatus() }
-    }
-
-    @objc private func quit() { NSApp.terminate(nil) }
-
-    private func updateMenuIcon(healthy: Bool?) {
-        guard let button = statusItem.button else { return }
-        let description = healthy.map { $0 ? "微信 NAS 已连接" : "微信 NAS 连接异常" } ?? "微信 NAS 正在连接"
-        let image = healthy == false
-            ? NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: description)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular))
-            : MenuIcon.storageBridge()
-        image?.isTemplate = true
-        button.title = ""
-        button.image = image
-        button.imagePosition = .imageOnly
-        button.alphaValue = healthy == nil ? 0.5 : 1
-        button.toolTip = description
-        button.setAccessibilityLabel(description)
-    }
-
-    @objc private func retryNow() {
-        guard !mounting else { return }
-        timer?.invalidate()
-        mounting = true
-        lastMessage = "正在检查连接…"
-        refreshStatus()
-        let config = MountService.load()
-        Task {
-            let result = await Task.detached { () -> String in
-                do {
-                    try MountService.mount(config)
-                    return "已连接，\(try MountService.verifyMedia(config)) 个媒体目录可读"
-                } catch { return "连接失败：\(MountService.friendlyError(error))" }
-            }.value
-            mounting = false
-            lastMessage = result
-            let success = result.hasPrefix("已连接")
-            failures = success ? 0 : min(failures + 1, 4)
-            updateMenuIcon(healthy: success)
-            statusItem.button?.toolTip = result
-            refreshStatus()
-            let delay = success ? 60.0 : min(30.0 * pow(2.0, Double(failures - 1)), 300.0)
-            scheduleCheck(after: delay)
-            if let data = try? JSONSerialization.data(withJSONObject: [
-                "message": result, "healthy": success, "checkedAt": ISO8601DateFormatter().string(from: Date()),
-                "loginEnabled": SMAppService.mainApp.status == .enabled
-            ], options: [.sortedKeys]) {
-                try? data.write(to: AppPaths.support.appendingPathComponent("status.json"), options: .atomic)
-            }
-        }
-    }
-
-    private func scheduleCheck(after delay: TimeInterval) {
-        timer = Timer.scheduledTimer(timeInterval: delay, target: self,
-            selector: #selector(retryNow), userInfo: nil, repeats: false)
-    }
-
-    private func buildWindow() {
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 470),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "微信 NAS 挂载"
-        window.center()
-
-        let title = NSTextField(labelWithString: "微信 NAS 挂载")
-        title.font = .systemFont(ofSize: 24, weight: .semibold)
-
-        let form = NSGridView(views: [
-            [NSTextField(labelWithString: "主 NAS 地址"), server],
-            [NSTextField(labelWithString: "备用 NAS 地址"), fallbackServer],
-            [NSTextField(labelWithString: "共享名"), share],
-            [NSTextField(labelWithString: "用户名"), username],
-            [NSTextField(labelWithString: "沙盒挂载点"), mountPoint]
-        ])
-        form.column(at: 0).xPlacement = .trailing
-        form.column(at: 1).width = 390
-        form.rowSpacing = 10
-
-        let mountButton = NSButton(title: "保存并启用自动连接", target: self, action: #selector(saveAndMount))
-        mountButton.bezelStyle = .rounded
-        let permissionButton = NSButton(title: "打开完全磁盘访问权限", target: self, action: #selector(openPrivacy))
-        permissionButton.bezelStyle = .rounded
-        let buttons = NSStackView(views: [mountButton, permissionButton])
-        buttons.orientation = .horizontal
-        buttons.spacing = 10
-
-        status.textColor = .secondaryLabelColor
-        status.maximumNumberOfLines = 6
-
-        let note = NSTextField(wrappingLabelWithString:
-            "适配微信版本：4.1.11。密码不会保存在本软件中。请先在 Finder 连接一次 SMB 共享并把密码存入钥匙串，然后授予本 App 完全磁盘访问权限。")
-        note.textColor = .secondaryLabelColor
-
-        let stack = NSStackView(views: [title, form, buttons, status, note])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 18
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = NSView()
-        window.contentView?.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 26)
-        ])
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func loadFields() {
-        let value = MountService.load()
-        server.stringValue = value.server
-        fallbackServer.stringValue = value.fallbackServer
-        share.stringValue = value.share
-        username.stringValue = value.username
-        mountPoint.stringValue = value.mountPoint
-    }
-
-    private func configuration() -> Configuration {
-        Configuration(server: server.stringValue.trimmingCharacters(in: .whitespaces),
-                      fallbackServer: fallbackServer.stringValue.trimmingCharacters(in: .whitespaces),
-                      share: share.stringValue.trimmingCharacters(in: .whitespaces),
-                      username: username.stringValue.trimmingCharacters(in: .whitespaces),
-                      mountPoint: mountPoint.stringValue.trimmingCharacters(in: .whitespaces))
-    }
-
-    @objc private func saveAndMount() {
-        do {
-            let value = configuration()
-            try MountService.save(value)
-            try SMAppService.mainApp.register()
-            try MountService.retireLaunchAgent()
-            retryNow()
-        } catch {
-            status.stringValue = "失败：\(error.localizedDescription)"
-            status.textColor = .systemRed
-        }
-    }
-
-    @objc private func openPrivacy() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-    }
-
-    private func refreshStatus() {
-        let login: String
-        switch SMAppService.mainApp.status {
-        case .enabled: login = "登录启动已启用"
-        case .requiresApproval: login = "登录启动待批准，请在系统设置 → 通用 → 登录项中开启"
-        default: login = "登录启动未启用"
-        }
-        status.stringValue = "\(lastMessage)\n\(login)"
-        status.textColor = lastMessage.hasPrefix("连接失败") ? .systemRed : .secondaryLabelColor
-    }
+        exit(0)
+    } catch { print(MountService.friendlyError(error)); exit(1) }
 }
-
-if CommandLine.arguments.contains("--status") || CommandLine.arguments.contains("--mount") ||
-    CommandLine.arguments.contains("--enable-login") {
+if CommandLine.arguments.contains("--qq-migrate") || CommandLine.arguments.contains("--qq-restore") {
+    do {
+        let lock = try QQMutationLock(); defer { lock.release() }
+        if CommandLine.arguments.contains("--qq-restore") { try QQService.restoreLocal(); print("已恢复 QQ 本地图片；NAS 副本保留") }
+        else { print("迁移成功，\(try QQService.migrate(SettingsStore.read().qq)) 个 QQ 图片目录已校验") }
+        exit(0)
+    } catch { print(MountService.friendlyError(error)); exit(1) }
+}
+if CommandLine.arguments.contains("--status") || CommandLine.arguments.contains("--mount") || CommandLine.arguments.contains("--enable-login") {
     do {
         if CommandLine.arguments.contains("--enable-login") {
-            try SMAppService.mainApp.register()
-            try MountService.retireLaunchAgent()
+            try SMAppService.mainApp.register(); try MountService.retireLaunchAgent()
         }
-        let config = MountService.load()
-        if CommandLine.arguments.contains("--mount") { try MountService.mount(config) }
-        let mounted = MountService.isMounted(config)
-        let count = mounted ? try MountService.verifyMedia(config) : 0
+        let settings = try SettingsStore.read()
+        if CommandLine.arguments.contains("--mount"), settings.wechat.enabled { try MountService.mount(settings.wechat) }
+        if CommandLine.arguments.contains("--mount"), settings.qq.enabled { try QQService.mount(settings.qq) }
+        let mounted = MountService.isMounted(settings.wechat)
+        // Run all potentially blocking filesystem checks in bounded subprocesses.
+        var count = 0; var wechatError = ""
+        if mounted {
+            do {
+                count = Int(try CommandRunner.worker(["--verify-wechat"])) ?? 0
+            } catch { wechatError = error.localizedDescription }
+        }
+        var qqStatus: [String: Any] = ["enabled": settings.qq.enabled, "mounted": MountService.isMounted(settings.qq)]
+        if settings.qq.enabled {
+            do {
+                let readable = Int(try CommandRunner.worker(["--verify-qq"])) ?? 0
+                qqStatus["readableMediaDirectories"] = readable; qqStatus["healthy"] = true
+            }
+            catch { qqStatus["message"] = error.localizedDescription; qqStatus["healthy"] = false }
+        }
         let data = try JSONSerialization.data(withJSONObject: [
-            "mounted": mounted, "readableMediaDirectories": count,
+            "mounted": mounted, "readableMediaDirectories": count, "wechatError": wechatError, "qq": qqStatus,
             "loginEnabled": SMAppService.mainApp.status == .enabled,
             "loginRequiresApproval": SMAppService.mainApp.status == .requiresApproval
         ], options: [.sortedKeys])
-        print(String(decoding: data, as: UTF8.self))
-        exit(mounted ? 0 : 1)
+        print(String(decoding: data, as: UTF8.self)); exit((!settings.wechat.enabled || (mounted && count > 0)) && (qqStatus["healthy"] as? Bool ?? true) ? 0 : 1)
     } catch { print("ERROR: \(error.localizedDescription)"); exit(1) }
 }
-
+if CommandLine.arguments.contains("--verify-qq") {
+    do { print(try QQService.probe(SettingsStore.read().qq)); exit(0) }
+    catch { print(error.localizedDescription); exit(1) }
+}
+if CommandLine.arguments.contains("--verify-wechat") {
+    do { print(try MountService.verifyMedia(SettingsStore.read().wechat)); exit(0) }
+    catch { print(error.localizedDescription); exit(1) }
+}
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
