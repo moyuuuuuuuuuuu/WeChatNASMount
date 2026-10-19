@@ -48,28 +48,28 @@ enum QQService {
             guard new.enabled else { throw failure("请先恢复本地图片，再关闭 QQ 自动连接。") }
         }
     }
-    static func protectMountPoint(_ config: Configuration) throws {
-        try config.validate(forQQ: true)
+    static func protectMountPoint(_ config: Configuration, forFeishu: Bool = false) throws {
+        if forFeishu { try FeishuService.validate(config) } else { try config.validate(forQQ: true) }
         guard !MountService.isMounted(config) else { return }
         let listing = try CommandRunner.run("/sbin/mount", []).1
-        guard !listing.contains(" on \(config.mountPoint) (") else { throw failure("QQ 挂载点已被其他共享占用。") }
+        guard !listing.contains(" on \(config.mountPoint) (") else { throw failure("图片缓存挂载点已被其他共享占用。") }
         let url = URL(fileURLWithPath: config.mountPoint)
         let parent = url.deletingLastPathComponent().resolvingSymlinksInPath()
         guard parent.path == url.deletingLastPathComponent().path,
               (try? fm.destinationOfSymbolicLink(atPath: url.path)) == nil else {
-            throw failure("QQ 挂载点或其父目录不能是符号链接。")
+            throw failure("图片缓存挂载点或其父目录不能是符号链接。")
         }
         try fm.createDirectory(at: url, withIntermediateDirectories: true)
         guard try fm.contentsOfDirectory(atPath: url.path).isEmpty else {
-            throw failure("QQ 挂载点存在本地文件，已停止挂载以避免遮蔽数据。")
+            throw failure("图片缓存挂载点存在本地文件，已停止挂载以避免遮蔽数据。")
         }
         // When unmounted, QQ cannot create its remote directory tree on the local disk.
         try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: url.path)
     }
-    static func mount(_ config: Configuration) throws {
-        try config.validate(forQQ: true)
+    static func mount(_ config: Configuration, forFeishu: Bool = false) throws {
+        if forFeishu { try FeishuService.validate(config) } else { try config.validate(forQQ: true) }
         if MountService.isMounted(config) { return }
-        try protectMountPoint(config)
+        try protectMountPoint(config, forFeishu: forFeishu)
         var errors: [String] = []
         for host in [config.server, config.fallbackServer].filter({ !$0.isEmpty }) {
             let result = try CommandRunner.run("/sbin/mount_smbfs", ["-N", "-s", "-o", "nobrowse,noowners,soft",

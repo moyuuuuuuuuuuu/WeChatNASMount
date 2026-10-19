@@ -225,8 +225,22 @@ if let index = CommandLine.arguments.firstIndex(of: "--check-profile"), CommandL
             try QQService.mount(settings.qq)
             let count = try QQService.probe(settings.qq)
             print(count == 0 ? "NAS 已连接，尚未迁移 QQ 图片" : "已连接，\(count) 个 QQ 图片目录可读")
+        case "feishu":
+            guard settings.feishu.enabled else { throw failure("飞书自动连接未启用。") }
+            try FeishuService.mount(settings.feishu)
+            let count = try FeishuService.probe(settings.feishu)
+            print(count == 0 ? "NAS 已连接，尚未迁移飞书图片" : "已连接，\(count) 个飞书图片目录可读")
         default: throw failure("未知应用。")
         }
+        exit(0)
+    } catch { print(MountService.friendlyError(error)); exit(1) }
+}
+if CommandLine.arguments.contains("--feishu-migrate") || CommandLine.arguments.contains("--feishu-restore") {
+    do {
+        let lock = try QQMutationLock(name: "feishu"); defer { lock.release() }
+        if CommandLine.arguments.contains("--feishu-restore") {
+            try FeishuService.restoreLocal(); print("已恢复飞书本地图片；原始本地备份与 NAS 副本保留")
+        } else { print("迁移成功，\(try FeishuService.migrate(SettingsStore.read().feishu)) 个飞书图片目录已校验") }
         exit(0)
     } catch { print(MountService.friendlyError(error)); exit(1) }
 }
@@ -246,6 +260,7 @@ if CommandLine.arguments.contains("--status") || CommandLine.arguments.contains(
         let settings = try SettingsStore.read()
         if CommandLine.arguments.contains("--mount"), settings.wechat.enabled { try MountService.mount(settings.wechat) }
         if CommandLine.arguments.contains("--mount"), settings.qq.enabled { try QQService.mount(settings.qq) }
+        if CommandLine.arguments.contains("--mount"), settings.feishu.enabled { try FeishuService.mount(settings.feishu) }
         let mounted = MountService.isMounted(settings.wechat)
         // Run all potentially blocking filesystem checks in bounded subprocesses.
         var count = 0; var wechatError = ""
@@ -262,13 +277,24 @@ if CommandLine.arguments.contains("--status") || CommandLine.arguments.contains(
             }
             catch { qqStatus["message"] = error.localizedDescription; qqStatus["healthy"] = false }
         }
+        var feishuStatus: [String: Any] = ["enabled": settings.feishu.enabled, "mounted": MountService.isMounted(settings.feishu)]
+        if settings.feishu.enabled {
+            do {
+                let readable = Int(try CommandRunner.worker(["--verify-feishu"])) ?? 0
+                feishuStatus["readableMediaDirectories"] = readable; feishuStatus["healthy"] = true
+            } catch { feishuStatus["message"] = error.localizedDescription; feishuStatus["healthy"] = false }
+        }
         let data = try JSONSerialization.data(withJSONObject: [
-            "mounted": mounted, "readableMediaDirectories": count, "wechatError": wechatError, "qq": qqStatus,
+            "mounted": mounted, "readableMediaDirectories": count, "wechatError": wechatError, "qq": qqStatus, "feishu": feishuStatus,
             "loginEnabled": SMAppService.mainApp.status == .enabled,
             "loginRequiresApproval": SMAppService.mainApp.status == .requiresApproval
         ], options: [.sortedKeys])
-        print(String(decoding: data, as: UTF8.self)); exit((!settings.wechat.enabled || (mounted && count > 0)) && (qqStatus["healthy"] as? Bool ?? true) ? 0 : 1)
+        print(String(decoding: data, as: UTF8.self)); exit((!settings.wechat.enabled || (mounted && count > 0)) && (qqStatus["healthy"] as? Bool ?? true) && (feishuStatus["healthy"] as? Bool ?? true) ? 0 : 1)
     } catch { print("ERROR: \(error.localizedDescription)"); exit(1) }
+}
+if CommandLine.arguments.contains("--verify-feishu") {
+    do { print(try FeishuService.probe(SettingsStore.read().feishu)); exit(0) }
+    catch { print(error.localizedDescription); exit(1) }
 }
 if CommandLine.arguments.contains("--verify-qq") {
     do { print(try QQService.probe(SettingsStore.read().qq)); exit(0) }

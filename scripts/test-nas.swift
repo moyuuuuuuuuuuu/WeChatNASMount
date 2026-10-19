@@ -7,7 +7,7 @@ try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: t
 defer { try? FileManager.default.removeItem(at: temp) }
 let main = try String(contentsOf: root.appendingPathComponent("Sources/WeChatNASMount/main.swift"), encoding: .utf8)
 var services = String(main.components(separatedBy: "// Worker processes")[0])
-for file in ["Settings.swift", "QQService.swift"] {
+for file in ["Settings.swift", "QQService.swift", "FeishuService.swift"] {
     services += "\n" + (try String(contentsOf: root.appendingPathComponent("Sources/WeChatNASMount/" + file), encoding: .utf8))
 }
 let test = #"""

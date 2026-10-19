@@ -33,12 +33,54 @@ extension Configuration {
     }
 }
 
+struct NASConnection: Codable, Sendable, Equatable {
+    var server: String
+    var fallbackServer: String
+    var username: String
+    init(_ config: Configuration = Configuration()) {
+        server = config.server; fallbackServer = config.fallbackServer; username = config.username
+    }
+    func applying(to config: Configuration) -> Configuration {
+        var value = config
+        value.server = server; value.fallbackServer = fallbackServer; value.username = username
+        return value
+    }
+}
+
+extension Configuration {
+    static var feishuDefault: Configuration {
+        Configuration(enabled: false, remoteDirectory: "Feishu", mountPoint: AppPaths.support.appendingPathComponent("mounts/feishu").path)
+    }
+}
+
 struct Settings: Codable, Sendable {
-    var schemaVersion = 2
+    var schemaVersion = 3
+    var connection: NASConnection
     var wechat: Configuration
     var qq: Configuration
-    init(wechat: Configuration = Configuration(), qq: Configuration = .qqDefault) {
-        self.wechat = wechat; self.qq = qq
+    var feishu: Configuration
+    init(wechat: Configuration = Configuration(), qq: Configuration = .qqDefault,
+         feishu: Configuration = .feishuDefault, connection: NASConnection? = nil) {
+        let profiles = [wechat, qq, feishu]
+        let primary = profiles.first { $0.enabled && !$0.server.isEmpty } ?? profiles.first { !$0.server.isEmpty } ?? wechat
+        let shared = connection ?? NASConnection(primary)
+        self.connection = shared
+        self.wechat = shared.applying(to: wechat); self.qq = shared.applying(to: qq); self.feishu = shared.applying(to: feishu)
+    }
+    enum CodingKeys: String, CodingKey { case schemaVersion, connection, wechat, qq, feishu }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let w = try values.decode(Configuration.self, forKey: .wechat)
+        let q = try values.decodeIfPresent(Configuration.self, forKey: .qq) ?? .qqDefault
+        let f = try values.decodeIfPresent(Configuration.self, forKey: .feishu) ?? .feishuDefault
+        let shared = try values.decodeIfPresent(NASConnection.self, forKey: .connection)
+        let active = [w, q, f].filter { $0.enabled && !$0.server.isEmpty }
+        // Reject ambiguous old settings rather than redirecting migrated links to another NAS.
+        if shared == nil, let first = active.first,
+           active.contains(where: { NASConnection($0) != NASConnection(first) }) {
+            throw failure("旧配置使用了不同 NAS 连接，请先统一主地址、备用地址和用户名后再升级。原配置未改动。")
+        }
+        self.init(wechat: w, qq: q, feishu: f, connection: shared)
     }
 }
 
@@ -108,13 +150,14 @@ enum CommandRunner {
 // another process from restoring or migrating the same directories concurrently.
 final class QQMutationLock {
     private var descriptor: Int32 = -1
-    init() throws {
+    init(name: String = "qq") throws {
+        guard ["qq", "feishu"].contains(name) else { throw failure("未知操作锁。") }
         try FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
-        descriptor = open(AppPaths.support.appendingPathComponent("qq-operation.lock").path, O_CREAT | O_RDWR, 0o600)
+        descriptor = open(AppPaths.support.appendingPathComponent("\(name)-operation.lock").path, O_CREAT | O_RDWR, 0o600)
         guard descriptor >= 0 else { throw failure("无法创建 QQ 操作锁。") }
         guard lockf(descriptor, F_TLOCK, 0) == 0 else {
             close(descriptor); descriptor = -1
-            throw failure("另一项 QQ 迁移或恢复仍在运行，请稍后重试。")
+            throw failure("另一项图片迁移或恢复仍在运行，请稍后重试。")
         }
     }
     func release() { if descriptor >= 0 { _ = lockf(descriptor, F_ULOCK, 0); close(descriptor); descriptor = -1 } }
