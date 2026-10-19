@@ -182,27 +182,24 @@ enum MenuIcon {
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             context.saveGState()
             defer { context.restoreGState() }
-            context.scaleBy(x: 0.75, y: 0.75)
-            context.setStrokeColor(NSColor.black.cgColor)
+            // A filled cuttlefish silhouette stays legible at menu-bar size.
             context.setFillColor(NSColor.black.cgColor)
-            context.setLineWidth(1.55)
+            context.fillEllipse(in: CGRect(x: 3, y: 1.5, width: 12, height: 12))
+            context.addPath(CGPath(roundedRect: CGRect(x: 3, y: 8, width: 12, height: 7),
+                cornerWidth: 3, cornerHeight: 3, transform: nil))
+            context.fillPath()
+            context.setStrokeColor(NSColor.black.cgColor)
+            context.setLineWidth(2)
             context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.move(to: CGPoint(x: 10.5, y: 14.8))
-            context.addLine(to: CGPoint(x: 14.7, y: 14.8))
-            context.addCurve(to: CGPoint(x: 18, y: 11.5),
-                control1: CGPoint(x: 16.5, y: 14.8), control2: CGPoint(x: 18, y: 13.3))
-            context.addLine(to: CGPoint(x: 18, y: 10.1))
-            context.strokePath()
-            for (x, y) in [(1.5, 12.0), (13.5, 4.5)] {
-                context.addPath(CGPath(roundedRect: CGRect(x: x, y: y, width: 9, height: 5.6),
-                    cornerWidth: 1.65, cornerHeight: 1.65, transform: nil))
-                context.strokePath()
-                context.fillEllipse(in: CGRect(x: x + 1.9, y: y + 2.2, width: 1.2, height: 1.2))
-                context.move(to: CGPoint(x: x + 4.8, y: y + 2.8))
-                context.addLine(to: CGPoint(x: x + 6.3, y: y + 2.8))
+            for (start, end, bend) in [(4.0, 1.5, 0.5), (7.0, 5.5, 5.0), (11.0, 12.5, 13.0), (14.0, 16.5, 17.5)] {
+                context.move(to: CGPoint(x: start, y: 12))
+                context.addQuadCurve(to: CGPoint(x: end, y: 15.5), control: CGPoint(x: bend, y: 17.5))
                 context.strokePath()
             }
+            // Knock out both eyes, preserving template-image transparency.
+            context.setBlendMode(.clear)
+            context.fillEllipse(in: CGRect(x: 5, y: 5.5, width: 2.5, height: 3.5))
+            context.fillEllipse(in: CGRect(x: 10.5, y: 5.5, width: 2.5, height: 3.5))
             return true
         }
         image.isTemplate = true

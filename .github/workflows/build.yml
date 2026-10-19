@@ -29,6 +29,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${GITHUB_REF_NAME}" dist/WeChat-NAS-Mount-macOS-arm64.zip
-          --title "${GITHUB_REF_NAME} — 公共 NAS 配置与飞书支持"
+          --title "${GITHUB_REF_NAME} — 墨鱼图标与启动栏清理"
           --notes-file RELEASE_NOTES.md
           --generate-notes

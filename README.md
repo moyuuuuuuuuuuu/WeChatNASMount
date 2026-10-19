@@ -82,7 +82,7 @@ swift scripts/test.swift
 ./scripts/build.sh
 ```
 
-产物位于 `dist/`，使用临时签名。GitHub Actions 在推送时构建；推送 `v*` 标签时发布 Release。
+ZIP 产物位于 `dist/`，临时应用包位于不参与索引的 `dist/.stage.noindex/`，使用临时签名。旧构建只保留 ZIP 归档，避免启动栏出现重复应用。GitHub Actions 在推送时构建；推送 `v*` 标签时发布 Release。
 
 可选的真实 NAS 集成检查：
 
